@@ -1,0 +1,31 @@
+name: Xu ly DMS Excel sang CSV
+
+# Kích hoạt mỗi khi có file DMS_Input.xlsx bị ghi đè/thêm mới
+on:
+  push:
+    paths:
+      - 'DMS_Input.xlsx'
+
+jobs:
+  convert_to_csv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mã nguồn
+        uses: actions/checkout@v3
+
+      - name: Cài đặt Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Cài đặt thư viện (Pandas, Openpyxl)
+        run: pip install -r requirements.txt
+
+      - name: Chạy Script giải mã Excel
+        run: python extract_data.py
+
+      - name: Lưu file CSV ngược lại lên GitHub
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "Tự động xuất CSV mới nhất 🤖"
+          file_pattern: 'DMS_Output_C5.csv'
