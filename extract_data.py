@@ -26,7 +26,7 @@ def process_and_update_online():
         df.to_excel(writer, sheet_name='DMS', index=False)
     
     # 3. Upload file lên OneDrive (Dùng user ID thay vì /me)
-    user_id = "dia_chi_email_cua_anh@domain.com" # Thay email của anh vào đây
+    user_id = "tiennm@tuanietc5.id.vn" # Thay email của anh vào đây
     target_path = "1.Job/NPP/C5%20-%20Reporting%20Day%20-%202026.xlsx"
     upload_url = f"https://graph.microsoft.com/v1.0/users/{user_id}/drive/root:/{target_path}:/content"
     
