@@ -1,33 +1,30 @@
 import pandas as pd
-import sys
 import os
 
-def extract_excel_to_csv(excel_file_path, sheet_name, output_csv_path):
+def process_excel_to_csv():
+    input_file = 'DMS_Input.xlsx'
+    output_file = 'output.csv'
+    
+    # Kiểm tra xem file có tồn tại không trước khi đọc
+    if not os.path.exists(input_file):
+        print(f"Lỗi: Không tìm thấy file {input_file}")
+        exit(1)
+        
     try:
-        print(f"Đang xử lý file: {excel_file_path} | Sheet: {sheet_name}")
+        print(f"Đang xử lý file: {input_file} | Sheet: Fundamental")
         
-        # openpyxl đọc lõi XML của Excel, bỏ qua mọi ActiveX/Form Controls
-        df = pd.read_excel(excel_file_path, sheet_name=sheet_name, engine='openpyxl')
+        # Đọc file Excel trực tiếp
+        # Engine 'openpyxl' là tiêu chuẩn cho .xlsx
+        df = pd.read_excel(input_file, sheet_name='Fundamental', engine='openpyxl')
         
-        if df.empty:
-            print(f"Cảnh báo: Sheet '{sheet_name}' rỗng.")
-        else:
-            # Lưu ra CSV chuẩn tiếng Việt (utf-8-sig)
-            df.to_csv(output_csv_path, index=False, encoding='utf-8-sig')
-            print(f"✅ Hoàn tất! File CSV đã lưu tại: {output_csv_path}")
-            
+        # Chuyển đổi sang CSV với định dạng UTF-8
+        df.to_csv(output_file, index=False, encoding='utf-8-sig')
+        
+        print(f"Thành công! Đã tạo file: {output_file}")
+        
     except Exception as e:
-        print(f"❌ Báo lỗi: {e}")
-        sys.exit(1)
+        print(f"Báo lỗi: {str(e)}")
+        exit(1)
 
 if __name__ == "__main__":
-    # Tên file quy ước (Power Automate sẽ đẩy file lên với tên này)
-    input_file = "DMS_Input.xlsx" 
-    target_sheet = "Fundamental"
-    output_file = "DMS_Output_C5.csv"
-    
-    if not os.path.exists(input_file):
-        print(f"❌ Không tìm thấy file {input_file} trên repository.")
-        sys.exit(1)
-        
-    extract_excel_to_csv(input_file, target_sheet, output_file)
+    process_excel_to_csv()
