@@ -3,6 +3,9 @@ import msal
 import requests
 import pandas as pd
 import numpy as np
+import time
+import io
+from openpyxl import load_workbook
 
 def get_token():
     tenant_id = os.environ.get('TENANT_ID')
@@ -13,47 +16,51 @@ def get_token():
     token_response = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
     return token_response['access_token']
 
-def update_via_session():
-    # 1. Đọc và làm sạch dữ liệu
-    df = pd.read_excel('DMS_Input.xlsx', sheet_name='Fundamental')
-    df = df.replace([np.nan, np.inf, -np.inf], None)
-    df = df.astype(object)
-    data_values = df.where(pd.notnull(df), None).values.tolist()
-    
+def update_file_securely():
     token = get_token()
     user_id = "tiennm@tuanvietc5.id.vn" 
     target_path = "1.Job/NPP/C5%20-%20Reporting%20Day%20-%202026.xlsx"
     base_url = f"https://graph.microsoft.com/v1.0/users/{user_id}/drive/root:/{target_path}"
-    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+    headers = {'Authorization': f'Bearer {token}'}
 
-    # 2. Tạo Workbook Session
-    session_url = f"{base_url}:/workbook/createSession"
-    session_response = requests.post(session_url, json={"persistChanges": True}, headers=headers)
-    
-    # SỬA LỖI: Kiểm tra session_id thay vì chỉ kiểm tra status code 200
-    session_id = session_response.json().get('id')
-    if not session_id:
-        print(f"Lỗi không tạo được session ID: {session_response.text}")
+    # 1. Tải file gốc về để bảo toàn dữ liệu các sheet khác
+    content_response = requests.get(f"{base_url}:/content", headers=headers)
+    if content_response.status_code != 200:
+        print(f"Lỗi tải file gốc: {content_response.status_code}")
         exit(1)
+    
+    file_stream = io.BytesIO(content_response.content)
+    wb = load_workbook(file_stream)
+    ws = wb['DMS']
+
+    # 2. Đọc dữ liệu mới
+    df = pd.read_excel('DMS_Input.xlsx', sheet_name='Fundamental')
+    df = df.replace([np.nan, np.inf, -np.inf], None)
+    
+    # 3. Dán đè dữ liệu vào sheet DMS (B6 trở đi)
+    data_values = df.values.tolist()
+    for r_idx, row in enumerate(data_values, start=6):
+        for c_idx, value in enumerate(row, start=2):
+            ws.cell(row=r_idx, column=c_idx, value=value)
+
+    # 4. Upload lại với cơ chế thử lại (Retry) để tránh lỗi Locked/Unavailable
+    save_stream = io.BytesIO()
+    wb.save(save_stream)
+    
+    max_retries = 5
+    for attempt in range(max_retries):
+        upload = requests.put(f"{base_url}:/content", data=save_stream.getvalue(), 
+                             headers={**headers, 'Content-Type': 'application/octet-stream'})
         
-    headers['workbook-session-id'] = session_id
-
-    # 3. Cập nhật dữ liệu vào sheet DMS
-    last_row = 6 + len(data_values) - 1
-    range_address = f"DMS!B6:BZ{last_row}"
-    update_url = f"{base_url}:/workbook/worksheets/DMS/range(address='{range_address}')"
-    
-    payload = {"values": data_values}
-    update_response = requests.patch(update_url, json=payload, headers=headers)
-    
-    # 4. Đóng Session
-    requests.post(f"{base_url}:/workbook/closeSession", headers=headers)
-
-    if update_response.status_code in [200, 201, 204]:
-        print("Thành công: Đã cập nhật dữ liệu qua Workbook Session.")
-    else:
-        print(f"Lỗi cập nhật dữ liệu: {update_response.text}")
-        exit(1)
+        if upload.status_code in [200, 201]:
+            print("Thành công: Đã cập nhật file.")
+            return
+        else:
+            print(f"Lần thử {attempt+1} thất bại (Status: {upload.status_code}). Đợi 30s...")
+            time.sleep(30)
+            
+    print("Đã thử 5 lần nhưng vẫn thất bại. Vui lòng kiểm tra lại tình trạng file trên OneDrive.")
+    exit(1)
 
 if __name__ == "__main__":
-    update_via_session()
+    update_file_securely()
