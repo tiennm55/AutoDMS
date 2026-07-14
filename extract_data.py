@@ -2,7 +2,7 @@ import os
 import msal
 import requests
 import pandas as pd
-import json
+import io
 
 def get_token():
     tenant_id = os.environ.get('TENANT_ID')
@@ -16,12 +16,19 @@ def get_token():
 def update_via_session():
     # 1. Đọc dữ liệu từ file input
     df = pd.read_excel('DMS_Input.xlsx', sheet_name='Fundamental')
-    # Chuyển dữ liệu thành dạng list of lists (để gửi lên API)
+    
+    # Xử lý dữ liệu: Loại bỏ NaN/Inf để tránh lỗi JSON
+    df = df.where(pd.notnull(df), None)
+    
+    # Xử lý định dạng ngày tháng (nếu có) để không bị lỗi JSON
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+            
     data_values = df.values.tolist()
     
     token = get_token()
     user_id = "tiennm@tuanvietc5.id.vn" 
-    # Đường dẫn file
     target_path = "1.Job/NPP/C5%20-%20Reporting%20Day%20-%202026.xlsx"
     base_url = f"https://graph.microsoft.com/v1.0/users/{user_id}/drive/root:/{target_path}"
     headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
@@ -33,14 +40,14 @@ def update_via_session():
     headers['workbook-session-id'] = session_id
 
     # 3. Cập nhật dữ liệu vào sheet DMS, vùng B6:BZ...
-    # Tính toán dải ô tự động dựa trên số dòng dữ liệu
     last_row = 6 + len(data_values) - 1
+    # Giả định cột cuối là Z, anh có thể điều chỉnh chữ cái BZ tùy theo file thực tế
     range_address = f"DMS!B6:BZ{last_row}"
     update_url = f"{base_url}:/workbook/worksheets/DMS/range(address='{range_address}')"
     
     payload = {"values": data_values}
     
-    # Thực hiện Patch dữ liệu
+    # Gửi dữ liệu
     update_response = requests.patch(update_url, json=payload, headers=headers)
     
     # 4. Đóng Session
