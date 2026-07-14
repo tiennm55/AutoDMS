@@ -4,6 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 import traceback
+import datetime # Bổ sung thư viện xử lý thời gian
 from openpyxl import load_workbook
 
 def get_token():
@@ -15,7 +16,6 @@ def get_token():
     token_response = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
     return token_response['access_token']
 
-# Hàm tự động tính toán chữ cái cột (VD: 2 -> B, 79 -> CA)
 def get_column_letter(n):
     string = ""
     while n > 0:
@@ -25,7 +25,7 @@ def get_column_letter(n):
 
 def update_preserve_link():
     try:
-        # 1. Đọc và chốt vùng dữ liệu (Giữ nguyên logic -2 siêu chuẩn của anh)
+        # 1. Đọc và chốt vùng dữ liệu
         wb_input = load_workbook('DMS_Input.xlsx', data_only=True)
         ws_input = wb_input['Fundamental']
         
@@ -49,9 +49,9 @@ def update_preserve_link():
         df = df.dropna(subset=[df.columns[0]])
         df = df.iloc[:, :78]
         
-        # Xử lý định dạng ngày tháng (nếu có) để tránh lỗi định dạng khi đẩy qua API
-        for col in df.select_dtypes(include=['datetime64', 'datetimetz']).columns:
-            df[col] = df[col].astype(str)
+        # MỚI THÊM: Quét và ép kiểu TẤT CẢ các đối tượng thời gian (Date, Time, Timestamp) thành Chuỗi
+        for col in df.columns:
+            df[col] = df[col].apply(lambda x: str(x) if isinstance(x, (datetime.datetime, datetime.date, datetime.time, pd.Timestamp)) else x)
             
         df = df.replace([np.nan, np.inf, -np.inf, 'NaT', 'nan'], None)
 
@@ -73,7 +73,6 @@ def update_preserve_link():
         start_row_idx = 6  # Dán từ dòng 6
         end_row_idx = start_row_idx + num_rows - 1
         
-        # Tạo chuỗi địa chỉ tự động, ví dụ: DMS!B6:CA90
         range_address = f"DMS!{start_col_str}{start_row_idx}:{end_col_str}{end_row_idx}"
 
         # 3. Đẩy dữ liệu trực tiếp bằng Excel API
@@ -82,12 +81,10 @@ def update_preserve_link():
         base_url = f"https://graph.microsoft.com/v1.0/users/{user_id}/drive/root:/1.Job/NPP/C5%20-%20Reporting%20Day%20-%202026.xlsx"
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
         
-        # Chọc thẳng vào vùng Range đã tính toán
         update_url = f"{base_url}:/workbook/worksheets/DMS/range(address='{range_address}')"
         
         print(f"Đang chèn dữ liệu trực tiếp vào vùng {range_address}...")
         
-        # Dùng PATCH để cập nhật ô, không khóa file, không phá link
         patch_response = requests.patch(update_url, json={"values": data_values}, headers=headers)
         
         if patch_response.status_code in [200, 204]:
