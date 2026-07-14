@@ -18,24 +18,48 @@ def get_token():
 
 def update_by_force_replace():
     try:
-        # 1. Đọc và làm sạch dữ liệu như cũ
+        # 1. Tìm dòng bắt đầu (start_row) và dòng kết thúc (end_row) có dữ liệu ở cột A
         wb_input = load_workbook('DMS_Input.xlsx', data_only=True)
         ws_input = wb_input['Fundamental']
-        start_row = next((row for row in range(1, ws_input.max_row + 1) if ws_input.cell(row=row, column=1).value is not None), 1)
         
-        df = pd.read_excel('DMS_Input.xlsx', sheet_name='Fundamental', skiprows=start_row - 1)
+        start_row = None
+        end_row = None
+        
+        for row in range(1, ws_input.max_row + 1):
+            if ws_input.cell(row=row, column=1).value is not None:
+                if start_row is None:
+                    start_row = row  # Ghi nhận dòng đầu tiên (vd: 6)
+                end_row = row        # Cập nhật liên tục để lấy dòng cuối cùng (vd: 90)
+        
+        if start_row is None:
+            print("Không có dữ liệu ở cột A để copy.")
+            return
+
+        # 2. Đọc chính xác vùng dữ liệu từ start_row đến end_row
+        # skiprows = start_row - 1: Bỏ qua phần thừa bên trên
+        # nrows = end_row - start_row + 1: Chỉ lấy đúng số dòng chứa dữ liệu (vd: từ 6 đến 90)
+        df = pd.read_excel('DMS_Input.xlsx', sheet_name='Fundamental', 
+                           skiprows=start_row - 1, 
+                           nrows=end_row - start_row + 1)
+        
+        # Cắt lấy 78 cột (Từ cột A đến cột BZ)
         df = df.iloc[:, :78].replace([np.nan, np.inf, -np.inf], None)
 
-        # 2. Setup API
+        # 3. Tải file gốc từ OneDrive để lấy cấu trúc
         token = get_token()
         user_id = "tiennm@tuanvietc5.id.vn"
         base_url = f"https://graph.microsoft.com/v1.0/users/{user_id}/drive/root:/1.Job/NPP/C5%20-%20Reporting%20Day%20-%202026.xlsx"
         headers = {'Authorization': f'Bearer {token}'}
 
-        # 3. Tải file về để lấy cấu trúc
         content_response = requests.get(f"{base_url}:/content", headers=headers)
+        content_response.raise_for_status()
+        
         wb = load_workbook(io.BytesIO(content_response.content))
         ws = wb['DMS']
+        
+        # 4. Ghi dữ liệu: Dán bắt đầu từ ô B6
+        # enumerate(..., start=6): Dòng bắt đầu dán là dòng 6
+        # enumerate(..., start=2): Cột bắt đầu dán là cột 2 (Cột B)
         for r_idx, row in enumerate(df.values.tolist(), start=6):
             for c_idx, value in enumerate(row[:78], start=2):
                 ws.cell(row=r_idx, column=c_idx, value=value)
@@ -43,18 +67,15 @@ def update_by_force_replace():
         save_stream = io.BytesIO()
         wb.save(save_stream)
 
-        # 4. CHIẾN THUẬT FORCE-REPLACE: Xóa file cũ trước khi upload file mới
-        # Xóa file cũ
+        # 5. Ghi đè file bằng chiến thuật Force-Replace
         requests.delete(base_url, headers=headers)
-        
-        # Upload file mới với cùng tên
-        upload_url = f"https://graph.microsoft.com/v1.0/users/{user_id}/drive/root:/1.Job/NPP/C5%20-%20Reporting%20Day%20-%202026.xlsx:/content"
+        upload_url = f"{base_url}:/content"
         upload = requests.put(upload_url, data=save_stream.getvalue(), headers={**headers, 'Content-Type': 'application/octet-stream'})
         
         if upload.status_code in [200, 201]:
-            print("Thành công: Đã xóa file cũ và ghi đè file mới.")
+            print(f"Thành công: Đã copy chính xác vùng A{start_row}:BZ{end_row} và dán vào từ ô B6.")
         else:
-            raise Exception(f"Upload thất bại sau khi xóa: {upload.text}")
+            raise Exception(f"Upload thất bại: {upload.text}")
 
     except Exception:
         traceback.print_exc()
