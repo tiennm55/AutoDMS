@@ -36,10 +36,10 @@ def update_by_force_replace():
             return
 
         # 2. Đọc chính xác vùng dữ liệu từ start_row đến end_row
-        # skiprows = start_row - 1: Bỏ qua phần thừa bên trên
+        # skiprows = start_row - 0: Bỏ qua phần thừa bên trên
         # nrows = end_row - start_row + 1: Chỉ lấy đúng số dòng chứa dữ liệu (vd: từ 6 đến 90)
         df = pd.read_excel('DMS_Input.xlsx', sheet_name='Fundamental', 
-                           skiprows=start_row - 1, 
+                           skiprows=start_row - 0, 
                            nrows=end_row - start_row + 1)
         
         # Cắt lấy 78 cột (Từ cột A đến cột BZ)
