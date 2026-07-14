@@ -48,11 +48,11 @@ def update_file_securely():
         wb_target = load_workbook(io.BytesIO(content_response.content))
         ws_target = wb_target['DMS']
 
-        # 4. Ghi dữ liệu: Quét từ cột A (1) đến BZ (78)
+        # 4. Ghi dữ liệu: Quét từ cột B (2) đến BZ (78)
         data_values = df.values.tolist()
         for r_idx, row in enumerate(data_values, start=6):
             # Cột 1 (A) đến 78 (BZ)
-            for c_idx, value in enumerate(row[:78], start=1): 
+            for c_idx, value in enumerate(row[:78], start=2): 
                 ws_target.cell(row=r_idx, column=c_idx, value=value)
 
         # 5. Upload với Retry
@@ -63,7 +63,7 @@ def update_file_securely():
             upload = requests.put(f"{base_url}:/content", data=save_stream.getvalue(), 
                                  headers={**headers, 'Content-Type': 'application/octet-stream'})
             if upload.status_code in [200, 201]:
-                print("Thành công: Đã quét từ A đến BZ và cập nhật file.")
+                print("Thành công: Đã quét từ B đến BZ và cập nhật file.")
                 return
             else:
                 print(f"Thử lại lần {attempt+1}, mã lỗi: {upload.status_code}")
