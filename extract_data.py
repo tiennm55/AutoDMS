@@ -3,7 +3,6 @@ import msal
 import requests
 import pandas as pd
 import numpy as np
-import io
 import traceback
 from openpyxl import load_workbook
 
@@ -16,70 +15,89 @@ def get_token():
     token_response = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
     return token_response['access_token']
 
-def update_by_force_replace():
+# Hàm tự động tính toán chữ cái cột (VD: 2 -> B, 79 -> CA)
+def get_column_letter(n):
+    string = ""
+    while n > 0:
+        n, remainder = divmod(n - 1, 26)
+        string = chr(65 + remainder) + string
+    return string
+
+def update_preserve_link():
     try:
-        # 1. Tìm dòng bắt đầu (start_row) và dòng kết thúc (end_row) có dữ liệu ở cột A
+        # 1. Đọc và chốt vùng dữ liệu (Giữ nguyên logic -2 siêu chuẩn của anh)
         wb_input = load_workbook('DMS_Input.xlsx', data_only=True)
         ws_input = wb_input['Fundamental']
         
         start_row = None
         end_row = None
-        
         for row in range(1, ws_input.max_row + 1):
             if ws_input.cell(row=row, column=1).value is not None:
                 if start_row is None:
-                    start_row = row  # Ghi nhận dòng đầu tiên (vd: 6)
-                end_row = row        # Cập nhật liên tục để lấy dòng cuối cùng (vd: 90)
+                    start_row = row
+                end_row = row
         
         if start_row is None:
             print("Không có dữ liệu ở cột A để copy.")
             return
 
-        # 2. Đọc chính xác vùng dữ liệu từ start_row đến end_row
-        # skiprows = start_row - 0: Bỏ qua phần thừa bên trên
-        # nrows = end_row - start_row + 1: Chỉ lấy đúng số dòng chứa dữ liệu (vd: từ 6 đến 90)
         df = pd.read_excel('DMS_Input.xlsx', sheet_name='Fundamental', 
                            skiprows=start_row - 2, 
                            nrows=end_row - start_row + 1)
         
-        # Cắt lấy 78 cột (Từ cột A đến cột BZ)
-        df = df.iloc[:, :78].replace([np.nan, np.inf, -np.inf], None)
+        # Làm sạch vùng dán
+        df = df.dropna(subset=[df.columns[0]])
+        df = df.iloc[:, :78]
+        
+        # Xử lý định dạng ngày tháng (nếu có) để tránh lỗi định dạng khi đẩy qua API
+        for col in df.select_dtypes(include=['datetime64', 'datetimetz']).columns:
+            df[col] = df[col].astype(str)
+            
+        df = df.replace([np.nan, np.inf, -np.inf, 'NaT', 'nan'], None)
 
-        # 3. Tải file gốc từ OneDrive để lấy cấu trúc
+        data_values = df.values.tolist()
+        num_rows = len(data_values)
+        num_cols = len(data_values[0]) if num_rows > 0 else 0
+        
+        if num_rows == 0:
+            print("Không có dòng dữ liệu hợp lệ.")
+            return
+
+        # 2. Tính toán linh hoạt tọa độ dải ô đích
+        start_col_idx = 2  # Dán từ cột B
+        end_col_idx = start_col_idx + num_cols - 1
+        
+        start_col_str = get_column_letter(start_col_idx)
+        end_col_str = get_column_letter(end_col_idx)
+        
+        start_row_idx = 6  # Dán từ dòng 6
+        end_row_idx = start_row_idx + num_rows - 1
+        
+        # Tạo chuỗi địa chỉ tự động, ví dụ: DMS!B6:CA90
+        range_address = f"DMS!{start_col_str}{start_row_idx}:{end_col_str}{end_row_idx}"
+
+        # 3. Đẩy dữ liệu trực tiếp bằng Excel API
         token = get_token()
         user_id = "tiennm@tuanvietc5.id.vn"
         base_url = f"https://graph.microsoft.com/v1.0/users/{user_id}/drive/root:/1.Job/NPP/C5%20-%20Reporting%20Day%20-%202026.xlsx"
-        headers = {'Authorization': f'Bearer {token}'}
-
-        content_response = requests.get(f"{base_url}:/content", headers=headers)
-        content_response.raise_for_status()
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
         
-        wb = load_workbook(io.BytesIO(content_response.content))
-        ws = wb['DMS']
+        # Chọc thẳng vào vùng Range đã tính toán
+        update_url = f"{base_url}:/workbook/worksheets/DMS/range(address='{range_address}')"
         
-        # 4. Ghi dữ liệu: Dán bắt đầu từ ô B6
-        # enumerate(..., start=6): Dòng bắt đầu dán là dòng 6
-        # enumerate(..., start=2): Cột bắt đầu dán là cột 2 (Cột B)
-        for r_idx, row in enumerate(df.values.tolist(), start=6):
-            for c_idx, value in enumerate(row[:78], start=2):
-                ws.cell(row=r_idx, column=c_idx, value=value)
+        print(f"Đang chèn dữ liệu trực tiếp vào vùng {range_address}...")
         
-        save_stream = io.BytesIO()
-        wb.save(save_stream)
-
-        # 5. Ghi đè file bằng chiến thuật Force-Replace
-        requests.delete(base_url, headers=headers)
-        upload_url = f"{base_url}:/content"
-        upload = requests.put(upload_url, data=save_stream.getvalue(), headers={**headers, 'Content-Type': 'application/octet-stream'})
+        # Dùng PATCH để cập nhật ô, không khóa file, không phá link
+        patch_response = requests.patch(update_url, json={"values": data_values}, headers=headers)
         
-        if upload.status_code in [200, 201]:
-            print(f"Thành công: Đã copy chính xác vùng A{start_row}:BZ{end_row} và dán vào từ ô B6.")
+        if patch_response.status_code in [200, 204]:
+            print("Thành công: Đã dán xong dữ liệu, Link gốc được giữ nguyên an toàn!")
         else:
-            raise Exception(f"Upload thất bại: {upload.text}")
+            raise Exception(f"Lỗi khi đẩy qua Excel API: {patch_response.text}")
 
     except Exception:
         traceback.print_exc()
         exit(1)
 
 if __name__ == "__main__":
-    update_by_force_replace()
+    update_preserve_link()
