@@ -39,7 +39,7 @@ def update_by_force_replace():
         # skiprows = start_row - 0: Bỏ qua phần thừa bên trên
         # nrows = end_row - start_row + 1: Chỉ lấy đúng số dòng chứa dữ liệu (vd: từ 6 đến 90)
         df = pd.read_excel('DMS_Input.xlsx', sheet_name='Fundamental', 
-                           skiprows=start_row - 0, 
+                           skiprows=start_row - 2, 
                            nrows=end_row - start_row + 1)
         
         # Cắt lấy 78 cột (Từ cột A đến cột BZ)
