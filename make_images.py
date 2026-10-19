@@ -80,7 +80,7 @@ def make_images():
         doc = fitz.open(stream=download_pdf(auth), filetype="pdf")
         page_texts = [normalize(p.get_text()) for p in doc]
         print(f"PDF có {len(doc)} trang")
-        for i, text in enumerate(page_texts[:30], start=1):
+        for i, text in enumerate(page_texts, start=1):
             print(f"  Trang {i}: {' '.join(text.split())[:80]}")
 
         used = set()
@@ -99,8 +99,8 @@ def make_images():
             upload(auth, f"{OUTPUT_FOLDER}/{item['file']}", render_page(doc[index]))
 
         if missing:
-            # Lưu vài trang đầu vào thư mục kiểm tra để xem rồi điền số trang vào IMAGES
-            for i in range(min(len(doc), 10)):
+            # Lưu 10 trang cuối (các sheet đã đặt vùng in thường nằm cuối PDF) để xem rồi điền số trang vào IMAGES
+            for i in range(max(len(doc) - 10, 0), len(doc)):
                 upload(auth, f"{OUTPUT_FOLDER}/kiem-tra/Trang_{i + 1}.png", render_page(doc[i]))
             raise Exception(f"Không tìm thấy trang cho: {', '.join(missing)}. "
                             f"Xem ảnh trong OneDrive/{OUTPUT_FOLDER}/kiem-tra rồi điền 'page' trong IMAGES.")
