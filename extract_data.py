@@ -5,7 +5,17 @@ import pandas as pd
 import numpy as np
 import traceback
 import datetime # Bổ sung thư viện xử lý thời gian
+from urllib.parse import quote
 from openpyxl import load_workbook
+
+USER_ID = "tiennm@tuanvietc5.id.vn"
+
+# Các file đích trên OneDrive (đường dẫn tính từ thư mục gốc OneDrive).
+# "D:\OneDrive - C5\DMS New.xlsx" trên máy = "DMS New.xlsx" ở gốc OneDrive.
+TARGETS = [
+    {"path": "1.Job/NPP/C5 - Report - FY2627.xlsx", "sheet": "DMS", "start_row": 6, "start_col": 2},
+    {"path": "DMS New.xlsx", "sheet": "Admin", "start_row": 4, "start_col": 1},  # dán từ ô A4
+]
 
 def get_token():
     tenant_id = os.environ.get('TENANT_ID')
@@ -63,34 +73,32 @@ def update_preserve_link():
             print("Không có dòng dữ liệu hợp lệ.")
             return
 
-        # 2. Tính toán linh hoạt tọa độ dải ô đích
-        start_col_idx = 2  # Dán từ cột B
-        end_col_idx = start_col_idx + num_cols - 1
-        
-        start_col_str = get_column_letter(start_col_idx)
-        end_col_str = get_column_letter(end_col_idx)
-        
-        start_row_idx = 6  # Dán từ dòng 6
-        end_row_idx = start_row_idx + num_rows - 1
-        
-        range_address = f"DMS!{start_col_str}{start_row_idx}:{end_col_str}{end_row_idx}"
-
-        # 3. Đẩy dữ liệu trực tiếp bằng Excel API
+        # 2. Dán vào từng file đích
         token = get_token()
-        user_id = "tiennm@tuanvietc5.id.vn"
-        base_url = f"https://graph.microsoft.com/v1.0/users/{user_id}/drive/root:/1.Job/NPP/C5%20-%20Report%20-%20FY2627.xlsx"
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-        
-        update_url = f"{base_url}:/workbook/worksheets/DMS/range(address='{range_address}')"
-        
-        print(f"Đang chèn dữ liệu trực tiếp vào vùng {range_address}...")
-        
-        patch_response = requests.patch(update_url, json={"values": data_values}, headers=headers)
-        
-        if patch_response.status_code in [200, 204]:
-            print("Thành công: Đã dán xong dữ liệu, Link gốc được giữ nguyên an toàn!")
-        else:
-            raise Exception(f"Lỗi khi đẩy qua Excel API: {patch_response.text}")
+
+        errors = []
+        for target in TARGETS:
+            start_col_str = get_column_letter(target["start_col"])
+            end_col_str = get_column_letter(target["start_col"] + num_cols - 1)
+            end_row_idx = target["start_row"] + num_rows - 1
+            range_address = f"{target['sheet']}!{start_col_str}{target['start_row']}:{end_col_str}{end_row_idx}"
+
+            base_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/drive/root:/{quote(target['path'])}"
+            update_url = f"{base_url}:/workbook/worksheets/{quote(target['sheet'])}/range(address='{range_address}')"
+
+            print(f"[{target['path']}] Đang chèn dữ liệu vào vùng {range_address}...")
+            patch_response = requests.patch(update_url, json={"values": data_values}, headers=headers)
+
+            if patch_response.status_code in [200, 204]:
+                print(f"[{target['path']}] Thành công: Đã dán xong dữ liệu, Link gốc được giữ nguyên an toàn!")
+            else:
+                # Ghi lỗi rồi làm tiếp file sau, để một file lỗi không chặn file còn lại
+                print(f"[{target['path']}] Lỗi khi đẩy qua Excel API: {patch_response.text}")
+                errors.append(target['path'])
+
+        if errors:
+            raise Exception(f"Không dán được vào: {', '.join(errors)}")
 
     except Exception:
         traceback.print_exc()
