@@ -56,12 +56,14 @@ def main():
     failed = 0
     links = [(title, download_url(auth, name)) for name, title in FILES]
     if SEND_LINK:
-        # Link tạm, hết hạn sau khoảng 1 giờ; bấm vào là tải ảnh gốc về máy
-        text = f"DMS {today}, bấm link để tải ảnh gốc (hết hạn sau khoảng 1 giờ):\n" + \
-               "\n".join(f"{title}: {link}" for title, link in links)
-        for chat_id in chat_ids:
-            if not send_message(chat_id, text):
-                failed += 1
+        # Link tạm, hết hạn sau khoảng 1 giờ; bấm vào là tải ảnh gốc về máy.
+        # Mỗi link một tin vì Zalo giới hạn 2000 ký tự/tin mà link OneDrive rất dài
+        for title, link in links:
+            text = f"{title} {today} (link hết hạn sau khoảng 1 giờ):\n{link}"
+            print(f"{title}: tin dài {len(text)} ký tự")
+            for chat_id in chat_ids:
+                if not send_message(chat_id, text):
+                    failed += 1
     else:
         for title, link in links:
             for chat_id in chat_ids:
