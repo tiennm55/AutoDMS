@@ -12,6 +12,9 @@ from extract_data import get_token, USER_ID
 OUTPUT_FOLDER = "DMS Anh"
 FILES = [("PhuYen.png", "DMS Phú Yên"), ("SongCau.png", "DMS Sông Cầu")]
 
+# True: gửi tin nhắn kèm link tải ảnh gốc. False: gửi ảnh như cũ
+SEND_LINK = True
+
 GRAPH = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/drive/root:"
 ZALO = f"https://bot-api.zaloplatforms.com/bot{os.environ.get('ZALO_BOT_TOKEN', '')}"
 
@@ -23,6 +26,12 @@ def download_url(auth, name):
     r.raise_for_status()
     # Thêm tên file vào cuối link để Zalo nhận ra đây là ảnh .png (cần khi chuyển tiếp ảnh sang nhóm)
     return r.json()["@microsoft.graph.downloadUrl"] + "&name=" + name
+
+
+def send_message(chat_id, text):
+    r = requests.post(f"{ZALO}/sendMessage", json={"chat_id": chat_id, "text": text}, timeout=60)
+    print(f"Gửi tin tới {chat_id}: HTTP {r.status_code} {r.text[:200]}")
+    return r.ok and r.json().get("ok")
 
 
 def send_photo(chat_id, photo, caption):
@@ -45,11 +54,19 @@ def main():
         day -= timedelta(days=1)
     today = day.strftime("%d/%m/%Y")
     failed = 0
-    for name, title in FILES:
-        link = download_url(auth, name)
+    links = [(title, download_url(auth, name)) for name, title in FILES]
+    if SEND_LINK:
+        # Link tạm, hết hạn sau khoảng 1 giờ; bấm vào là tải ảnh gốc về máy
+        text = f"DMS {today}, bấm link để tải ảnh gốc (hết hạn sau khoảng 1 giờ):\n" + \
+               "\n".join(f"{title}: {link}" for title, link in links)
         for chat_id in chat_ids:
-            if not send_photo(chat_id, link, f"{title} {today}"):
+            if not send_message(chat_id, text):
                 failed += 1
+    else:
+        for title, link in links:
+            for chat_id in chat_ids:
+                if not send_photo(chat_id, link, f"{title} {today}"):
+                    failed += 1
     if failed:
         sys.exit(f"Có {failed} ảnh gửi Zalo không thành công")
 
