@@ -21,7 +21,8 @@ def download_url(auth, name):
     url = f"{GRAPH}/{quote(f'{OUTPUT_FOLDER}/{name}')}"
     r = requests.get(url, headers=auth)
     r.raise_for_status()
-    return r.json()["@microsoft.graph.downloadUrl"]
+    # Thêm tên file vào cuối link để Zalo nhận ra đây là ảnh .png (cần khi chuyển tiếp ảnh sang nhóm)
+    return r.json()["@microsoft.graph.downloadUrl"] + "&name=" + name
 
 
 def send_photo(chat_id, photo, caption):
