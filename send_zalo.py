@@ -13,7 +13,7 @@ OUTPUT_FOLDER = "DMS Anh"
 FILES = [("PhuYen.png", "DMS Phú Yên"), ("SongCau.png", "DMS Sông Cầu")]
 
 # True: gửi tin nhắn kèm link tải ảnh gốc. False: gửi ảnh như cũ
-SEND_LINK = True
+SEND_LINK = False
 
 GRAPH = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/drive/root:"
 ZALO = f"https://bot-api.zaloplatforms.com/bot{os.environ.get('ZALO_BOT_TOKEN', '')}"
