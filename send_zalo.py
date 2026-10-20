@@ -1,6 +1,6 @@
 import os
 import sys
-import time
+from datetime import datetime, timedelta
 import requests
 from urllib.parse import quote
 from extract_data import get_token, USER_ID
@@ -39,7 +39,11 @@ def main():
         return
 
     auth = {"Authorization": f"Bearer {get_token()}"}
-    today = time.strftime("%d/%m/%Y", time.gmtime(time.time() + 7 * 3600))
+    # Số liệu DMS là của ngày hôm trước (giờ Việt Nam); hôm trước là Chủ nhật thì lấy Thứ 7
+    day = datetime.utcnow() + timedelta(hours=7) - timedelta(days=1)
+    if day.weekday() == 6:
+        day -= timedelta(days=1)
+    today = day.strftime("%d/%m/%Y")
     failed = 0
     for name, title in FILES:
         link = download_url(auth, name)
