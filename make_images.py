@@ -1,6 +1,5 @@
 import io
 import time
-from datetime import datetime, timezone
 import unicodedata
 import traceback
 import requests
@@ -28,31 +27,37 @@ def normalize(text):
     return unicodedata.normalize("NFC", text).upper()
 
 
-def last_modified(auth):
-    r = requests.get(f"{GRAPH}/{quote(WORKBOOK)}", headers=auth)
-    r.raise_for_status()
-    return datetime.fromisoformat(r.json()["lastModifiedDateTime"][:19] + "+00:00")
+def log_day_cells(book, session):
+    # Ghi ra log công thức và giá trị của dòng có chữ "Đã qua" để kiểm tra số ngày còn lại
+    sheets = requests.get(f"{book}/worksheets?$select=name", headers=session).json()["value"]
+    for sheet in sheets:
+        url = f"{book}/worksheets/{quote(sheet['name'])}/usedRange?$select=address,formulas,values"
+        r = requests.get(url, headers=session, timeout=120)
+        if not r.ok:
+            continue
+        data = r.json()
+        for i, row in enumerate(data["values"]):
+            if any("ĐÃ QUA" in normalize(str(v)) for v in row):
+                cells = [(f, v) for f, v in zip(data["formulas"][i], row) if f != ""]
+                print(f"[{sheet['name']}] {data['address']} dòng {i + 1}: {cells[:12]}")
 
 
 def recalculate(auth):
     # Tính lại toàn bộ (cả công thức theo ngày như TODAY) trong một phiên có lưu,
-    # rồi chờ OneDrive ghi file xong mới xuất PDF. Không chờ thì PDF lấy số cũ.
+    # rồi chờ 30 giây cho OneDrive lưu trước khi xuất PDF.
     book = f"{GRAPH}/{quote(WORKBOOK)}:/workbook"
     r = requests.post(f"{book}/createSession", json={"persistChanges": True}, headers=auth)
     r.raise_for_status()
     session = {**auth, "workbook-session-id": r.json()["id"]}
     r = requests.post(f"{book}/application/calculate", json={"calculationType": "Full"}, headers=session)
     print(f"Tính lại toàn bộ công thức: HTTP {r.status_code}")
+    try:
+        log_day_cells(book, session)
+    except Exception as e:
+        print(f"Không đọc được ô Đã qua: {e}")
     requests.post(f"{book}/closeSession", headers=session)
-    done = datetime.now(timezone.utc)
 
-    for _ in range(16):
-        time.sleep(15)
-        if last_modified(auth) >= done:
-            print("OneDrive đã lưu file sau khi tính lại")
-            time.sleep(15)
-            return
-    print("Chờ 4 phút vẫn chưa thấy OneDrive lưu file, vẫn xuất PDF")
+    time.sleep(30)
 
 
 def download_pdf(auth):
