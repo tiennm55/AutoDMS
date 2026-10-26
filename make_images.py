@@ -1,5 +1,7 @@
 import io
+import re
 import time
+from datetime import datetime, timedelta, timezone
 import unicodedata
 import traceback
 import requests
@@ -27,37 +29,65 @@ def normalize(text):
     return unicodedata.normalize("NFC", text).upper()
 
 
-def log_day_cells(book, session):
-    # Ghi ra log công thức và giá trị của dòng có chữ "Đã qua" để kiểm tra số ngày còn lại
-    sheets = requests.get(f"{book}/worksheets?$select=name", headers=session).json()["value"]
+def col_letter(n):
+    s = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def col_number(letters):
+    n = 0
+    for ch in letters:
+        n = n * 26 + ord(ch) - 64
+    return n
+
+
+def find_today_cells(book, auth):
+    # Tìm các ô có công thức dùng TODAY() trong toàn bộ file
+    found = []
+    sheets = requests.get(f"{book}/worksheets?$select=name", headers=auth).json()["value"]
     for sheet in sheets:
-        url = f"{book}/worksheets/{quote(sheet['name'])}/usedRange?$select=address,formulas,values"
-        r = requests.get(url, headers=session, timeout=120)
+        url = f"{book}/worksheets/{quote(sheet['name'])}/usedRange?$select=address,formulas"
+        r = requests.get(url, headers=auth, timeout=120)
         if not r.ok:
             continue
         data = r.json()
-        for i, row in enumerate(data["values"]):
-            if any("ĐÃ QUA" in normalize(str(v)) for v in row):
-                cells = [(f, v) for f, v in zip(data["formulas"][i], row) if f != ""]
-                print(f"[{sheet['name']}] {data['address']} dòng {i + 1}: {cells[:12]}")
+        start = data["address"].split("!")[-1].split(":")[0]
+        letters = "".join(ch for ch in start if ch.isalpha())
+        row0, col0 = int(start[len(letters):]), col_number(letters)
+        for i, row in enumerate(data["formulas"]):
+            for j, f in enumerate(row):
+                if isinstance(f, str) and "TODAY()" in f.upper():
+                    found.append((sheet["name"], f"{col_letter(col0 + j)}{row0 + i}", f))
+    return found
 
 
-def recalculate(auth):
-    # Tính lại toàn bộ (cả công thức theo ngày như TODAY) trong một phiên có lưu,
-    # rồi chờ 30 giây cho OneDrive lưu trước khi xuất PDF.
+def set_formula(book, auth, sheet, cell, formula):
+    url = f"{book}/worksheets/{quote(sheet)}/range(address='{cell}')"
+    r = requests.patch(url, json={"formulas": [[formula]]}, headers=auth)
+    print(f"  [{sheet}!{cell}] {formula}: HTTP {r.status_code}")
+
+
+def pin_today(auth):
+    # Excel online tính TODAY() theo giờ máy chủ Microsoft (giờ Mỹ), có lúc lùi 1 ngày so với Việt Nam.
+    # Nên tạm thay TODAY() bằng ngày hôm nay giờ Việt Nam, xuất ảnh xong thì trả lại công thức cũ.
     book = f"{GRAPH}/{quote(WORKBOOK)}:/workbook"
-    r = requests.post(f"{book}/createSession", json={"persistChanges": True}, headers=auth)
-    r.raise_for_status()
-    session = {**auth, "workbook-session-id": r.json()["id"]}
-    r = requests.post(f"{book}/application/calculate", json={"calculationType": "Full"}, headers=session)
-    print(f"Tính lại toàn bộ công thức: HTTP {r.status_code}")
-    try:
-        log_day_cells(book, session)
-    except Exception as e:
-        print(f"Không đọc được ô Đã qua: {e}")
-    requests.post(f"{book}/closeSession", headers=session)
+    today = datetime.now(timezone.utc) + timedelta(hours=7)
+    literal = f"DATE({today.year},{today.month},{today.day})"
+    cells = find_today_cells(book, auth)
+    print(f"Thay TODAY() bằng {literal} ở {len(cells)} ô:")
+    for sheet, cell, f in cells:
+        set_formula(book, auth, sheet, cell, re.sub(r"TODAY\(\)", literal, f, flags=re.I))
+    time.sleep(30)  # chờ OneDrive lưu trước khi xuất PDF
+    return book, cells
 
-    time.sleep(30)
+
+def restore_today(auth, book, cells):
+    print("Trả lại công thức TODAY():")
+    for sheet, cell, f in cells:
+        set_formula(book, auth, sheet, cell, f)
 
 
 def download_pdf(auth):
@@ -100,9 +130,13 @@ def make_images():
     try:
         auth = {"Authorization": f"Bearer {get_token()}"}
 
-        recalculate(auth)
+        book, today_cells = pin_today(auth)
+        try:
+            pdf = download_pdf(auth)
+        finally:
+            restore_today(auth, book, today_cells)
 
-        doc = fitz.open(stream=download_pdf(auth), filetype="pdf")
+        doc = fitz.open(stream=pdf, filetype="pdf")
         page_texts = [normalize(p.get_text()) for p in doc]
         print(f"PDF có {len(doc)} trang")
         for i, text in enumerate(page_texts, start=1):
