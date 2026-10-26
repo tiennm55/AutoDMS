@@ -1,5 +1,6 @@
 import io
 import time
+from datetime import datetime, timezone
 import unicodedata
 import traceback
 import requests
@@ -27,10 +28,31 @@ def normalize(text):
     return unicodedata.normalize("NFC", text).upper()
 
 
+def last_modified(auth):
+    r = requests.get(f"{GRAPH}/{quote(WORKBOOK)}", headers=auth)
+    r.raise_for_status()
+    return datetime.fromisoformat(r.json()["lastModifiedDateTime"][:19] + "+00:00")
+
+
 def recalculate(auth):
-    url = f"{GRAPH}/{quote(WORKBOOK)}:/workbook/application/calculate"
-    r = requests.post(url, json={"calculationType": "Recalculate"}, headers=auth)
-    print(f"Tính lại công thức: HTTP {r.status_code}")
+    # Tính lại toàn bộ (cả công thức theo ngày như TODAY) trong một phiên có lưu,
+    # rồi chờ OneDrive ghi file xong mới xuất PDF. Không chờ thì PDF lấy số cũ.
+    book = f"{GRAPH}/{quote(WORKBOOK)}:/workbook"
+    r = requests.post(f"{book}/createSession", json={"persistChanges": True}, headers=auth)
+    r.raise_for_status()
+    session = {**auth, "workbook-session-id": r.json()["id"]}
+    r = requests.post(f"{book}/application/calculate", json={"calculationType": "Full"}, headers=session)
+    print(f"Tính lại toàn bộ công thức: HTTP {r.status_code}")
+    requests.post(f"{book}/closeSession", headers=session)
+    done = datetime.now(timezone.utc)
+
+    for _ in range(16):
+        time.sleep(15)
+        if last_modified(auth) >= done:
+            print("OneDrive đã lưu file sau khi tính lại")
+            time.sleep(15)
+            return
+    print("Chờ 4 phút vẫn chưa thấy OneDrive lưu file, vẫn xuất PDF")
 
 
 def download_pdf(auth):
@@ -73,9 +95,7 @@ def make_images():
     try:
         auth = {"Authorization": f"Bearer {get_token()}"}
 
-        # Chờ OneDrive lưu xong dữ liệu vừa dán rồi mới xuất PDF
         recalculate(auth)
-        time.sleep(30)
 
         doc = fitz.open(stream=download_pdf(auth), filetype="pdf")
         page_texts = [normalize(p.get_text()) for p in doc]
