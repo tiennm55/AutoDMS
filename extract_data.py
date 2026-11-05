@@ -1,12 +1,18 @@
 import os
 import msal
 import requests
-import pandas as pd
-import numpy as np
+import math
 import traceback
 import datetime # Bổ sung thư viện xử lý thời gian
 from urllib.parse import quote
-from openpyxl import load_workbook
+from python_calamine import CalamineWorkbook
+
+# File DMS do Power Automate đẩy lên repo. Từ 11/2026 file gốc là .xlsb.
+# Có DMS_Input.xlsb thì dùng file đó, không thì dùng DMS_Input.xlsx.
+# Định dạng thật được nhận theo nội dung file, nên .xlsb lưu dưới tên .xlsx vẫn đọc được.
+INPUT_FILES = ["DMS_Input.xlsb", "DMS_Input.xlsx"]
+INPUT_SHEET = "Fundamental"
+MAX_COLS = 78
 
 USER_ID = "tiennm@tuanvietc5.id.vn"
 
@@ -33,39 +39,58 @@ def get_column_letter(n):
         string = chr(65 + remainder) + string
     return string
 
+def find_input():
+    for name in INPUT_FILES:
+        if os.path.exists(name):
+            return name
+    raise Exception(f"Không thấy file đầu vào: {' hoặc '.join(INPUT_FILES)}")
+
+
+def clean_value(v):
+    # Đổi giá trị ô về dạng gửi được qua Excel API, giống cách làm cũ với pandas
+    if v is None or v == "":
+        return None
+    if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):
+            return None
+        if v.is_integer() and abs(v) < 2**53:
+            return int(v)
+    if isinstance(v, datetime.datetime):
+        return str(v)
+    if isinstance(v, datetime.date):
+        return str(datetime.datetime(v.year, v.month, v.day))
+    if isinstance(v, (datetime.time, datetime.timedelta)):
+        return str(v)
+    return v
+
+
+def read_input_rows():
+    # Đọc sheet Fundamental của file .xlsb hoặc .xlsx (python-calamine đọc được cả hai)
+    path = find_input()
+    with open(path, "rb") as f:
+        wb = CalamineWorkbook.from_filelike(f)
+        if INPUT_SHEET not in wb.sheet_names:
+            raise Exception(f"File {path} không có sheet '{INPUT_SHEET}'. Các sheet đang có: {wb.sheet_names}")
+        rows = wb.get_sheet_by_name(INPUT_SHEET).to_python(skip_empty_area=False)
+    print(f"Đọc {path}: sheet {INPUT_SHEET} có {len(rows)} dòng")
+
+    # Lấy từ dòng đầu tới dòng cuối có dữ liệu ở cột A, bỏ các dòng trống cột A ở giữa
+    data_rows = [[clean_value(v) for v in row[:MAX_COLS]] for row in rows]
+    return [row for row in data_rows if row and row[0] is not None]
+
+
 def update_preserve_link():
     try:
         # 1. Đọc và chốt vùng dữ liệu
-        wb_input = load_workbook('DMS_Input.xlsx', data_only=True)
-        ws_input = wb_input['Fundamental']
-        
-        start_row = None
-        end_row = None
-        for row in range(1, ws_input.max_row + 1):
-            if ws_input.cell(row=row, column=1).value is not None:
-                if start_row is None:
-                    start_row = row
-                end_row = row
-        
-        if start_row is None:
+        data_values = read_input_rows()
+        if not data_values:
             print("Không có dữ liệu ở cột A để copy.")
             return
 
-        df = pd.read_excel('DMS_Input.xlsx', sheet_name='Fundamental', 
-                           skiprows=start_row - 2, 
-                           nrows=end_row - start_row + 1)
-        
-        # Làm sạch vùng dán
-        df = df.dropna(subset=[df.columns[0]])
-        df = df.iloc[:, :78]
-        
-        # MỚI THÊM: Quét và ép kiểu TẤT CẢ các đối tượng thời gian (Date, Time, Timestamp) thành Chuỗi
-        for col in df.columns:
-            df[col] = df[col].apply(lambda x: str(x) if isinstance(x, (datetime.datetime, datetime.date, datetime.time, pd.Timestamp)) else x)
-            
-        df = df.replace([np.nan, np.inf, -np.inf, 'NaT', 'nan'], None)
+        # Dòng nào ngắn hơn thì thêm ô trống cho đủ cột
+        width = max(len(row) for row in data_values)
+        data_values = [row + [None] * (width - len(row)) for row in data_values]
 
-        data_values = df.values.tolist()
         num_rows = len(data_values)
         num_cols = len(data_values[0]) if num_rows > 0 else 0
         
