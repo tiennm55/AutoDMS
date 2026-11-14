@@ -6,6 +6,7 @@ import traceback
 import datetime # Bổ sung thư viện xử lý thời gian
 from urllib.parse import quote
 from python_calamine import CalamineWorkbook
+from xlsx_patch import write_range
 
 # File DMS do Power Automate đẩy lên repo. Từ 11/2026 file gốc là .xlsb.
 # Có DMS_Input.xlsb thì dùng file đó, không thì dùng DMS_Input.xlsx.
@@ -79,6 +80,35 @@ def read_input_rows():
     return [row for row in data_rows if row and row[0] is not None]
 
 
+def is_unsupported_workbook(response):
+    # Excel API từ chối sửa file có form controls / ActiveX
+    return response.status_code == 400 and (
+        "UnsupportedFeatureEditWarning" in response.text or "unsupportedWorkbook" in response.text
+    )
+
+
+def paste_by_file(base_url, auth, target, data_values):
+    # Đường dự phòng: tải file về, ghi vùng dán bằng cách sửa XML, rồi tải lên đè đúng file đó.
+    # File giữ nguyên ID nên link chia sẻ và link từ file khác vẫn đúng; control, link ngoài,
+    # định dạng được chép nguyên. If-Match để không ghi đè nếu ai đó vừa sửa file trong lúc chạy.
+    meta = requests.get(f"{base_url}?$select=id,eTag", headers=auth, timeout=60)
+    meta.raise_for_status()
+    etag = meta.json()["eTag"]
+    content = requests.get(f"{base_url}:/content", headers=auth, timeout=300)
+    content.raise_for_status()
+    new_bytes = write_range(content.content, target["sheet"], target["start_row"], target["start_col"], data_values)
+    up = requests.put(
+        f"{base_url}:/content",
+        data=new_bytes,
+        headers={**auth, "If-Match": etag,
+                 "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        timeout=300,
+    )
+    if up.status_code not in [200, 201]:
+        hint = " (file vừa bị sửa hoặc đang mở khoá, chạy lại sau)" if up.status_code in [409, 412, 423] else ""
+        raise Exception(f"Upload lỗi HTTP {up.status_code}{hint}: {up.text[:300]}")
+
+
 def update_preserve_link():
     try:
         # 1. Đọc và chốt vùng dữ liệu
@@ -117,6 +147,15 @@ def update_preserve_link():
 
             if patch_response.status_code in [200, 204]:
                 print(f"[{target['path']}] Thành công: Đã dán xong dữ liệu, Link gốc được giữ nguyên an toàn!")
+            elif is_unsupported_workbook(patch_response):
+                print(f"[{target['path']}] Excel API không sửa được vì file có form controls/ActiveX. "
+                      "Chuyển sang sửa trực tiếp file...")
+                try:
+                    paste_by_file(base_url, {'Authorization': headers['Authorization']}, target, data_values)
+                    print(f"[{target['path']}] Thành công (sửa trực tiếp file): đã dán xong, control và link được giữ nguyên.")
+                except Exception as e:
+                    print(f"[{target['path']}] Sửa trực tiếp file cũng lỗi: {e}")
+                    errors.append(target['path'])
             else:
                 # Ghi lỗi rồi làm tiếp file sau, để một file lỗi không chặn file còn lại
                 print(f"[{target['path']}] Lỗi khi đẩy qua Excel API: {patch_response.text}")

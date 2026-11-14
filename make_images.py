@@ -68,6 +68,7 @@ def set_formula(book, auth, sheet, cell, formula):
     url = f"{book}/worksheets/{quote(sheet)}/range(address='{cell}')"
     r = requests.patch(url, json={"formulas": [[formula]]}, headers=auth)
     print(f"  [{sheet}!{cell}] {formula}: HTTP {r.status_code}")
+    return r
 
 
 def pin_today(auth):
@@ -76,10 +77,17 @@ def pin_today(auth):
     book = f"{GRAPH}/{quote(WORKBOOK)}:/workbook"
     today = datetime.now(timezone.utc) + timedelta(hours=7)
     literal = f"DATE({today.year},{today.month},{today.day})"
-    cells = find_today_cells(book, auth)
+    try:
+        cells = find_today_cells(book, auth)
+    except Exception as e:
+        print(f"Bỏ qua bước thay TODAY() vì Excel API không đọc được file ({e}).")
+        return book, []
     print(f"Thay TODAY() bằng {literal} ở {len(cells)} ô:")
     for sheet, cell, f in cells:
-        set_formula(book, auth, sheet, cell, re.sub(r"TODAY\(\)", literal, f, flags=re.I))
+        r = set_formula(book, auth, sheet, cell, re.sub(r"TODAY\(\)", literal, f, flags=re.I))
+        if r.status_code == 400 and "Unsupported" in r.text:
+            print("Excel API không sửa được file (có form controls/ActiveX), bỏ qua bước thay TODAY().")
+            return book, []
     time.sleep(30)  # chờ OneDrive lưu trước khi xuất PDF
     return book, cells
 
