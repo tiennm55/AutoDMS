@@ -20,7 +20,7 @@ jobs:
 
       - name: Cài đặt thư viện
         run: |
-          pip install python-calamine msal requests pymupdf pillow
+          pip install python-calamine msal requests pymupdf pillow lxml
 
       - name: Chạy Script xử lý file
         env:
