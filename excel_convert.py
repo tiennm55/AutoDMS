@@ -7,7 +7,7 @@ import datetime
 import io
 import math
 import os
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import msal
 import requests
@@ -124,13 +124,50 @@ def find_drive(token, site):
     )
 
 
+def norm_path(path):
+    """Làm sạch đường dẫn người dùng nhập: bỏ dấu nháy, đổi \\ thành /, bỏ phần ổ đĩa/thư viện ở đầu.
+
+    Nhận được cả: C5-Insight/07_dms_mo, "C5-Insight\\07_dms_mo",
+    D:\\C5\\tiennm - Documents\\C5-Insight\\07_dms_mo, /Shared Documents/C5-Insight/07_dms_mo,
+    https://xxx.sharepoint.com/Shared%20Documents/C5-Insight/07_dms_mo
+    """
+    p = (path or "").strip().strip('"\'').strip()
+    p = unquote(p).replace("\\", "/")
+    if p.lower().startswith("https://"):
+        p = urlparse(p).path
+        # bỏ /sites/<tên> nếu có
+        parts = p.strip("/").split("/")
+        if len(parts) >= 2 and parts[0].lower() in ("sites", "teams"):
+            p = "/".join(parts[2:])
+    # Thư mục đồng bộ trên máy: ...\\<site> - Documents\\...
+    low = p.lower()
+    for marker in (" - documents/", " - shared documents/", " - tài liệu/"):
+        i = low.find(marker)
+        if i >= 0:
+            p = p[i + len(marker):]
+            break
+    p = p.strip("/")
+    for lib in ("Shared Documents/", "Documents/", "Tài liệu/"):
+        if p.lower().startswith(lib.lower()):
+            p = p[len(lib):]
+            break
+    if p.lower() in ("shared documents", "documents"):
+        p = ""
+    return "/".join(x.strip() for x in p.split("/") if x.strip())
+
+
 def item_url(drive, path):
-    path = path.strip("/")
+    path = norm_path(path)
     return f"{drive}/root" if not path else f"{drive}/root:/{quote(path)}:"
 
 
 def get_item(token, drive, path):
     r = requests.get(item_url(drive, path), headers={"Authorization": f"Bearer {token}"})
+    if r.status_code == 404:
+        raise Exception(
+            f"Không thấy '{norm_path(path)}' trong thư viện Documents. Kiểm tra lại tên thư mục/file "
+            "(tính từ thư viện, ví dụ C5-Insight/07_dms_mo hoặc C5-Insight/07_dms_mo/ten file.xlsb)."
+        )
     r.raise_for_status()
     return r.json()
 
