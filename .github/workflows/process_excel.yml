@@ -20,7 +20,18 @@ jobs:
 
       - name: Cài đặt thư viện
         run: |
-          pip install python-calamine msal requests pymupdf pillow
+          pip install python-calamine openpyxl msal requests pymupdf pillow
+
+      - name: Chuyển DMS sang .xlsx cho Power BI
+        # Lỗi ở bước này không chặn các bước dán dữ liệu, tạo ảnh, gửi Zalo
+        continue-on-error: true
+        env:
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          PBI_SITE: tiennm
+          PBI_OUTPUT_PATH: C5-Insight/07_dms_mo/DMS CBD.xlsx
+        run: python convert_to_xlsx.py
 
       - name: Chạy Script xử lý file
         env:
