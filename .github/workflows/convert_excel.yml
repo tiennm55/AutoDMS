@@ -1,0 +1,51 @@
+name: Chuyển Excel sang .xlsx
+# Power Automate gọi workflow này (repository_dispatch, event_type = convert-excel) sau khi lưu file đính kèm.
+# client_payload: {"site": "tiennm", "path": "C5-Insight/07_dms_mo/ten file.xlsb", "source_action": "move"}
+# File không đi qua repo: chỉ tải về máy chạy GitHub, đổi, rồi ghi lại SharePoint.
+on:
+  repository_dispatch:
+    types: [convert-excel]
+  workflow_dispatch:
+    inputs:
+      site:
+        description: 'Site SharePoint (tên hoặc link đầy đủ). Để trống = OneDrive cá nhân'
+        default: 'tiennm'
+        required: false
+      path:
+        description: 'Đường dẫn file hoặc thư mục trong thư viện Documents'
+        required: true
+      source_action:
+        description: 'File gốc: move (vào _goc), delete, keep'
+        default: 'move'
+        required: false
+
+concurrency:
+  group: convert-excel-${{ github.event.client_payload.path || inputs.path }}
+  cancel-in-progress: false
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            excel_convert.py
+            convert_sharepoint.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install python-calamine openpyxl msal requests
+
+      - name: Đổi sang .xlsx
+        env:
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          SRC_SITE: ${{ github.event.client_payload.site || inputs.site }}
+          SRC_PATH: ${{ github.event.client_payload.path || inputs.path }}
+          SOURCE_ACTION: ${{ github.event.client_payload.source_action || inputs.source_action }}
+        run: python convert_sharepoint.py
