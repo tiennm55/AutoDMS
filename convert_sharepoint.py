@@ -18,7 +18,7 @@ import traceback
 import excel_convert as xc
 
 SITE = os.environ.get("SRC_SITE", "")
-SRC_PATH = os.environ.get("SRC_PATH", "").strip().strip("/")
+SRC_PATH = xc.norm_path(os.environ.get("SRC_PATH", ""))
 SOURCE_ACTION = (os.environ.get("SOURCE_ACTION") or "move").strip().lower()
 BACKUP_FOLDER = "_goc"
 
@@ -46,6 +46,7 @@ def main():
         raise SystemExit(f"SOURCE_ACTION phải là move, delete hoặc keep (đang là '{SOURCE_ACTION}')")
     token = xc.get_token()
     drive = xc.find_drive(token, SITE)
+    print(f"Đường dẫn: '{SRC_PATH or '(gốc thư viện)'}'")
     item = xc.get_item(token, drive, SRC_PATH)
 
     if "folder" in item:

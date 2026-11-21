@@ -12,7 +12,7 @@ on:
         default: 'tiennm'
         required: false
       path:
-        description: 'Đường dẫn file hoặc thư mục trong thư viện Documents'
+        description: "Thư mục (đổi mọi file .xls/.xlsb/.xlsm trong đó) hoặc 1 file, vd C5-Insight/07_dms_mo. Dán đường dẫn trên máy cũng được"
         required: true
       source_action:
         description: 'File gốc: move (vào _goc), delete, keep'
