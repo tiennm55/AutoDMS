@@ -20,7 +20,7 @@ jobs:
 
       - name: Cài đặt thư viện
         run: |
-          pip install python-calamine openpyxl msal requests pymupdf pillow
+          pip install python-calamine openpyxl msal requests pymupdf pillow lxml
 
       - name: Chuyển DMS sang .xlsx cho Power BI
         # Lỗi ở bước này không chặn các bước dán dữ liệu, tạo ảnh, gửi Zalo
