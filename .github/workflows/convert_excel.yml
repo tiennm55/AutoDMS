@@ -12,11 +12,15 @@ on:
         default: 'tiennm'
         required: false
       path:
-        description: 'Đường dẫn file hoặc thư mục trong thư viện Documents'
+        description: "Thư mục (đổi mọi file .xls/.xlsb/.xlsm trong đó) hoặc 1 file, vd C5-Insight/07_dms_mo. Dán đường dẫn trên máy cũng được"
         required: true
       source_action:
         description: 'File gốc: move (vào _goc), delete, keep'
         default: 'move'
+        required: false
+      mode:
+        description: 'full = giữ công thức, định dạng (LibreOffice); values = chỉ giá trị'
+        default: 'full'
         required: false
 
 concurrency:
@@ -38,7 +42,19 @@ jobs:
         with:
           python-version: '3.11'
 
-      - run: pip install python-calamine openpyxl msal requests
+      - run: pip install python-calamine openpyxl lxml msal requests
+
+      - name: Cài LibreOffice bản mới nhất (để giữ công thức, định dạng)
+        # Bản 24.2 có sẵn trên Ubuntu đọc sai hàm XLOOKUP trong .xlsb, nên tải bản mới nhất.
+        # Nếu tải lỗi, bước đổi sẽ tự dùng bản chỉ giá trị.
+        continue-on-error: true
+        run: |
+          V=$(curl -fsL https://download.documentfoundation.org/libreoffice/stable/ | grep -oE 'href="[0-9]+\.[0-9]+\.[0-9]+/"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1)
+          echo "LibreOffice $V"
+          curl -fsSL -o lo.tgz "https://download.documentfoundation.org/libreoffice/stable/$V/deb/x86_64/LibreOffice_${V}_Linux_x86-64_deb.tar.gz"
+          tar xzf lo.tgz
+          sudo dpkg -i LibreOffice_*_deb/DEBS/*.deb > /dev/null
+          ls -d /opt/libreoffice*/program/soffice
 
       - name: Đổi sang .xlsx
         env:
@@ -48,4 +64,5 @@ jobs:
           SRC_SITE: ${{ github.event.client_payload.site || inputs.site }}
           SRC_PATH: ${{ github.event.client_payload.path || inputs.path }}
           SOURCE_ACTION: ${{ github.event.client_payload.source_action || inputs.source_action }}
+          CONVERT_MODE: ${{ github.event.client_payload.mode || inputs.mode }}
         run: python convert_sharepoint.py
