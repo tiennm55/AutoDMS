@@ -26,7 +26,34 @@ from python_calamine import CalamineWorkbook
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 USER_ID = "tiennm@tuanvietc5.id.vn"
-CONVERT_EXTS = (".xls", ".xlsb", ".xlsm")
+# Đuôi file được xem xét. Định dạng THẬT được nhận theo nội dung (detect_format), vì luồng admin
+# có thể lưu file .xlsb dưới tên .xlsx.
+CONVERT_EXTS = (".xls", ".xlsx", ".xlsb", ".xlsm", ".xlt", ".xltx", ".xltm", ".ods")
+
+
+def detect_format(data):
+    """Nhận định dạng thật theo nội dung: xls, xlsb, xlsm, xltx, xltm, ods, xlsx, hoặc None (không phải Excel)."""
+    if data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        return "xls"  # file Excel 97-2003 (cũng có thể là file .xlsx đặt mật khẩu)
+    if data[:2] != b"PK":
+        return None
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+        names = set(z.namelist())
+        if "mimetype" in names and b"opendocument.spreadsheet" in z.read("mimetype"):
+            return "ods"
+        if "xl/workbook.bin" in names:
+            return "xlsb"
+        ct = z.read("[Content_Types].xml") if "[Content_Types].xml" in names else b""
+    except zipfile.BadZipFile:
+        return None
+    if b"macroEnabled" in ct:
+        return "xltm" if b"template.macroEnabled" in ct else "xlsm"
+    if b"spreadsheetml.template" in ct:
+        return "xltx"
+    if b"spreadsheetml.sheet.main" in ct:
+        return "xlsx"
+    return None
 CHUNK = 5 * 1024 * 1024  # bội số của 320 KB theo yêu cầu của Graph upload session
 
 
