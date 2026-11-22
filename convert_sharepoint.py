@@ -9,7 +9,8 @@ Power Automate gọi workflow "Chuyển Excel sang .xlsx" sau khi lưu file đí
              delete xoá (vào thùng rác SharePoint, khôi phục được 93 ngày)
              keep   giữ nguyên
 
-File .xlsx cùng tên, cùng thư mục, ghi đè nếu đã có. Chỉ giữ GIÁ TRỊ (xem excel_convert.py).
+File .xlsx cùng tên, cùng thư mục, ghi đè nếu đã có.
+CONVERT_MODE: full (mặc định, LibreOffice giữ công thức và định dạng) hoặc values (chỉ giá trị). Xem excel_convert.py.
 """
 import os
 import posixpath
@@ -21,6 +22,8 @@ SITE = os.environ.get("SRC_SITE", "")
 SRC_PATH = xc.norm_path(os.environ.get("SRC_PATH", ""))
 SOURCE_ACTION = (os.environ.get("SOURCE_ACTION") or "move").strip().lower()
 BACKUP_FOLDER = "_goc"
+# full = LibreOffice, giữ công thức/định dạng (tự quay về chỉ giá trị nếu sai nhiều); values = chỉ giá trị
+MODE = (os.environ.get("CONVERT_MODE") or "full").strip().lower()
 
 
 def convert_one(token, drive, folder, item):
@@ -28,9 +31,10 @@ def convert_one(token, drive, folder, item):
     base, ext = posixpath.splitext(name)
     out_path = posixpath.join(folder, base + ".xlsx")
     print(f"\n{posixpath.join(folder, name)} → {out_path}")
-    data = xc.to_xlsx(xc.download(token, drive, item["id"]))
+    data, used = xc.convert(xc.download(token, drive, item["id"]), ext.lower(), MODE)
     xc.upload(token, drive, out_path, data)
-    print(f"  Đã lưu {base}.xlsx ({len(data) / 1024 / 1024:.1f} MB)")
+    kind = "giữ công thức, định dạng" if used == "full" else "chỉ giá trị"
+    print(f"  Đã lưu {base}.xlsx ({len(data) / 1024 / 1024:.1f} MB, {kind})")
 
     if SOURCE_ACTION == "delete":
         xc.delete(token, drive, item["id"])

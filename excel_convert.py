@@ -1,12 +1,22 @@
 """Hàm dùng chung: đổi file Excel bất kỳ (.xls, .xlsb, .xlsm, .xlsx) sang .xlsx và đọc/ghi SharePoint/OneDrive qua Graph.
 
-File .xlsx tạo ra chỉ chứa GIÁ TRỊ: giữ tên, thứ tự, trạng thái ẩn và vị trí ô của mọi sheet,
-nhưng bỏ công thức, định dạng, macro, pivot, biểu đồ, hình ảnh.
+Hai cách đổi:
+- to_xlsx_full(): dùng LibreOffice (chạy ngầm), GIỮ công thức, định dạng, định dạng có điều kiện,
+  gộp ô, cố định dòng/cột, hình ảnh, sheet ẩn. Mất: liên kết sang file Excel khác (công thức thành #REF!),
+  macro VBA, ghi chú ô. Sau khi đổi, so giá trị từng ô với file gốc và in ra số ô khác.
+- to_xlsx(): chỉ GIÁ TRỊ (không công thức, không định dạng). Dùng khi không có LibreOffice
+  hoặc khi bản LibreOffice làm sai quá nhiều ô.
 """
 import datetime
+import glob
 import io
 import math
 import os
+import re
+import shutil
+import subprocess
+import tempfile
+import zipfile
 from urllib.parse import quote, unquote, urlparse
 
 import msal
@@ -72,6 +82,126 @@ def to_xlsx(data, sheets=None, log=print):
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ---------- Đổi bằng LibreOffice (giữ công thức, định dạng) ----------
+
+def find_soffice():
+    for p in [os.environ.get("SOFFICE", "")] + sorted(glob.glob("/opt/libreoffice*/program/soffice"), reverse=True):
+        if p and os.path.exists(p):
+            return p
+    return shutil.which("soffice") or shutil.which("libreoffice")
+
+
+_BAD_AMP = re.compile(rb"&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9A-Fa-f]+);)")
+
+
+def _fix_xml(xlsx):
+    """Một số bản LibreOffice ghi dấu & chưa mã hoá trong externalLink*.xml làm Excel báo lỗi file. Sửa lại."""
+    from lxml import etree
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(xlsx)) as zi, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zo:
+        for it in zi.infolist():
+            d = zi.read(it.filename)
+            if it.filename.endswith((".xml", ".rels")):
+                try:
+                    etree.fromstring(d)
+                except etree.XMLSyntaxError:
+                    d = _BAD_AMP.sub(b"&amp;", d)
+                    etree.fromstring(d)
+                    print(f"  Đã sửa XML lỗi: {it.filename}")
+            zo.writestr(it, d)
+    return out.getvalue()
+
+
+def _norm(v):
+    if v == "" or v is None:
+        return None
+    if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return int(v) if v.is_integer() else round(v, 6)
+    if isinstance(v, (datetime.datetime, datetime.date)):
+        return str(v)[:10]
+    if isinstance(v, datetime.time):
+        return str(v)[:8]
+    return v
+
+
+def compare_values(src_data, out_data, log=print):
+    """So giá trị (kết quả công thức đã lưu) từng ô giữa file gốc và file mới. Trả về (số ô có dữ liệu, số ô khác)."""
+    a_wb = CalamineWorkbook.from_filelike(io.BytesIO(src_data))
+    b_wb = CalamineWorkbook.from_filelike(io.BytesIO(out_data))
+    total = diff = 0
+    for name in a_wb.sheet_names:
+        if name not in b_wb.sheet_names:
+            raise Exception(f"File mới thiếu sheet '{name}'")
+        a = a_wb.get_sheet_by_name(name).to_python(skip_empty_area=False)
+        b = b_wb.get_sheet_by_name(name).to_python(skip_empty_area=False)
+        n = d = 0
+        ex = []
+        for i in range(max(len(a), len(b))):
+            ra = a[i] if i < len(a) else []
+            rb = b[i] if i < len(b) else []
+            for j in range(max(len(ra), len(rb))):
+                va = _norm(ra[j]) if j < len(ra) else None
+                vb = _norm(rb[j]) if j < len(rb) else None
+                if va is None and vb is None:
+                    continue
+                n += 1
+                if va == vb:
+                    continue
+                if isinstance(va, (int, float)) and isinstance(vb, (int, float)) and abs(va - vb) <= 1e-6 * max(1, abs(va)):
+                    continue
+                d += 1
+                if len(ex) < 2:
+                    ex.append(f"dòng {i + 1} cột {j + 1}: {va!r} -> {vb!r}")
+        total += n
+        diff += d
+        log(f"  {name}: {n} ô, khác {d}" + (f" (vd {'; '.join(ex)})" if d else ""))
+    return total, diff
+
+
+def to_xlsx_full(data, ext=".xlsb", log=print):
+    """Đổi bằng LibreOffice. Trả về bytes .xlsx. Lỗi nếu không có LibreOffice hoặc đổi không được."""
+    soffice = find_soffice()
+    if not soffice:
+        raise Exception("Không tìm thấy LibreOffice (soffice)")
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "in" + ext)
+        with open(src, "wb") as f:
+            f.write(data)
+        outdir = os.path.join(tmp, "out")
+        # Hồ sơ người dùng riêng để không đụng tiến trình LibreOffice khác
+        profile = "file://" + os.path.join(tmp, "profile")
+        r = subprocess.run(
+            [soffice, f"-env:UserInstallation={profile}", "--headless", "--norestore",
+             "--convert-to", "xlsx:Calc Office Open XML", "--outdir", outdir, src],
+            capture_output=True, text=True, timeout=600,
+        )
+        out = os.path.join(outdir, "in.xlsx")
+        if r.returncode != 0 or not os.path.exists(out):
+            raise Exception(f"LibreOffice đổi lỗi: {r.stdout} {r.stderr}")
+        with open(out, "rb") as f:
+            return _fix_xml(f.read())
+
+
+def convert(data, ext=".xlsb", mode="full", max_diff_ratio=0.005, log=print):
+    """Đổi sang .xlsx. mode="full": LibreOffice, nếu không được hoặc số ô khác > max_diff_ratio thì
+    tự quay về chỉ giá trị. mode="values": chỉ giá trị. Trả về (bytes, cách đã dùng)."""
+    if mode == "full":
+        try:
+            out = to_xlsx_full(data, ext, log)
+            log("  So giá trị với file gốc:")
+            total, diff = compare_values(data, out, log)
+            ratio = diff / total if total else 0
+            log(f"  Tổng: {total} ô, khác {diff} ({ratio:.2%})")
+            if ratio <= max_diff_ratio:
+                return out, "full"
+            log(f"  CẢNH BÁO: khác quá {max_diff_ratio:.1%}, chuyển sang bản chỉ giá trị")
+        except Exception as e:
+            log(f"  CẢNH BÁO: không đổi được bằng LibreOffice ({e}), chuyển sang bản chỉ giá trị")
+    return to_xlsx(data, log=log), "values"
 
 
 # ---------- Graph ----------
