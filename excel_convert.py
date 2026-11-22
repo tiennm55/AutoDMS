@@ -128,8 +128,9 @@ def _norm(v):
     return v
 
 
-def compare_values(src_data, out_data, log=print):
-    """So giá trị (kết quả công thức đã lưu) từng ô giữa file gốc và file mới. Trả về (số ô có dữ liệu, số ô khác)."""
+def compare_values(src_data, out_data, log=print, cells=None):
+    """So giá trị (kết quả công thức đã lưu) từng ô giữa file gốc và file mới. Trả về (số ô có dữ liệu, số ô khác).
+    Nếu truyền dict cells, ghi các ô khác vào cells[tên sheet] = [(dòng, cột, giá trị gốc), ...] (đếm từ 0)."""
     a_wb = CalamineWorkbook.from_filelike(io.BytesIO(src_data))
     b_wb = CalamineWorkbook.from_filelike(io.BytesIO(out_data))
     total = diff = 0
@@ -154,12 +155,140 @@ def compare_values(src_data, out_data, log=print):
                 if isinstance(va, (int, float)) and isinstance(vb, (int, float)) and abs(va - vb) <= 1e-6 * max(1, abs(va)):
                     continue
                 d += 1
+                if cells is not None:
+                    cells.setdefault(name, []).append((i, j, ra[j] if j < len(ra) else None))
                 if len(ex) < 2:
                     ex.append(f"dòng {i + 1} cột {j + 1}: {va!r} -> {vb!r}")
         total += n
         diff += d
         log(f"  {name}: {n} ô, khác {d}" + (f" (vd {'; '.join(ex)})" if d else ""))
     return total, diff
+
+
+_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_RNS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_EPOCH = datetime.datetime(1899, 12, 30)
+
+
+def _col_letter(j):
+    s = ""
+    j += 1
+    while j:
+        j, r = divmod(j - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _col_index(ref):
+    n = 0
+    for ch in ref:
+        if ch.isalpha():
+            n = n * 26 + ord(ch.upper()) - 64
+        else:
+            break
+    return n - 1
+
+
+def _set_cell_value(c, v):
+    """Bỏ công thức của ô <c>, ghi giá trị v (giữ kiểu định dạng s)."""
+    from lxml import etree
+    for child in list(c):
+        c.remove(child)
+    c.attrib.pop("t", None)
+    c.attrib.pop("cm", None)
+    c.attrib.pop("vm", None)
+    if v is None or v == "":
+        return
+    if isinstance(v, bool):
+        c.set("t", "b")
+        etree.SubElement(c, f"{{{_NS}}}v").text = "1" if v else "0"
+        return
+    if isinstance(v, datetime.datetime):
+        v = (v - _EPOCH).total_seconds() / 86400
+    elif isinstance(v, datetime.date):
+        v = (datetime.datetime(v.year, v.month, v.day) - _EPOCH).days
+    elif isinstance(v, datetime.time):
+        v = (v.hour * 3600 + v.minute * 60 + v.second + v.microsecond / 1e6) / 86400
+    elif isinstance(v, datetime.timedelta):
+        v = v.total_seconds() / 86400
+    if isinstance(v, (int, float)):
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return
+        etree.SubElement(c, f"{{{_NS}}}v").text = repr(v) if isinstance(v, float) else str(v)
+        return
+    v = str(v)
+    if v.startswith("#") and v.rstrip("!?0/").upper() in ("#REF", "#N/A", "#NAME", "#VALUE", "#DIV", "#NUM", "#NULL"):
+        c.set("t", "e")
+        etree.SubElement(c, f"{{{_NS}}}v").text = v
+        return
+    c.set("t", "inlineStr")
+    is_ = etree.SubElement(c, f"{{{_NS}}}is")
+    t = etree.SubElement(is_, f"{{{_NS}}}t")
+    t.text = v
+    if v != v.strip():
+        t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+
+
+def paste_values(xlsx, cells, log=print):
+    """Dán giá trị gốc vào các ô trong cells (dict sheet -> [(dòng, cột, giá trị)]), bỏ công thức của các ô đó.
+    Các ô khác giữ nguyên công thức và định dạng. Trả về bytes .xlsx mới."""
+    from lxml import etree
+    from posixpath import join, normpath
+    if not cells:
+        return xlsx
+    zi = zipfile.ZipFile(io.BytesIO(xlsx))
+    wb = etree.fromstring(zi.read("xl/workbook.xml"))
+    rels = etree.fromstring(zi.read("xl/_rels/workbook.xml.rels"))
+    target = {r.get("Id"): r.get("Target") for r in rels}
+    paths = {}
+    for sh in wb.iter(f"{{{_NS}}}sheet"):
+        t = target[sh.get(f"{{{_RNS}}}id")]
+        paths[sh.get("name")] = t.lstrip("/") if t.startswith("/") else normpath(join("xl", t))
+
+    patched = {}
+    for name, items in cells.items():
+        path = paths[name]
+        root = etree.fromstring(zi.read(path))
+        sd = root.find(f"{{{_NS}}}sheetData")
+        rows = {int(r.get("r")): r for r in sd.iter(f"{{{_NS}}}row")}
+        for i, j, v in items:
+            rn = i + 1
+            ref = f"{_col_letter(j)}{rn}"
+            row = rows.get(rn)
+            if row is None:
+                row = etree.Element(f"{{{_NS}}}row", r=str(rn))
+                after = [r for k, r in rows.items() if k < rn]
+                if after:
+                    max(after, key=lambda r: int(r.get("r"))).addnext(row)
+                else:
+                    sd.insert(0, row)
+                rows[rn] = row
+            cell = None
+            for c in row.iter(f"{{{_NS}}}c"):
+                if c.get("r") == ref:
+                    cell = c
+                    break
+            if cell is None:
+                if v is None or v == "":
+                    continue
+                cell = etree.Element(f"{{{_NS}}}c", r=ref)
+                prev = [c for c in row.iter(f"{{{_NS}}}c") if _col_index(c.get("r", "A")) < j]
+                if prev:
+                    prev[-1].addnext(cell)
+                else:
+                    row.insert(0, cell)
+                row.attrib.pop("spans", None)
+            _set_cell_value(cell, v)
+        patched[path] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+        log(f"  {name}: dán giá trị gốc vào {len(items)} ô")
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zo:
+        for it in zi.infolist():
+            if it.filename == "xl/calcChain.xml":
+                continue
+            zo.writestr(it, patched.get(it.filename, zi.read(it.filename)))
+    return out.getvalue()
 
 
 def to_xlsx_full(data, ext=".xlsb", log=print):
@@ -186,21 +315,32 @@ def to_xlsx_full(data, ext=".xlsb", log=print):
             return _fix_xml(f.read())
 
 
-def convert(data, ext=".xlsb", mode="full", max_diff_ratio=0.005, log=print):
-    """Đổi sang .xlsx. mode="full": LibreOffice, nếu không được hoặc số ô khác > max_diff_ratio thì
-    tự quay về chỉ giá trị. mode="values": chỉ giá trị. Trả về (bytes, cách đã dùng)."""
+def convert(data, ext=".xlsb", mode="full", max_diff_ratio=0.05, log=print):
+    """Đổi sang .xlsx. Trả về (bytes, cách đã dùng).
+    mode="full": LibreOffice giữ công thức, định dạng. Ô nào có giá trị khác file gốc (vd #REF! do liên kết
+    sang file khác) thì bỏ công thức, dán giá trị gốc (như Paste Values). Nếu LibreOffice lỗi, hoặc số ô
+    phải dán vượt max_diff_ratio (file đổi hỏng nhiều), thì quay về bản chỉ giá trị.
+    mode="values": chỉ giá trị."""
     if mode == "full":
         try:
             out = to_xlsx_full(data, ext, log)
             log("  So giá trị với file gốc:")
-            total, diff = compare_values(data, out, log)
+            cells = {}
+            total, diff = compare_values(data, out, log, cells)
             ratio = diff / total if total else 0
             log(f"  Tổng: {total} ô, khác {diff} ({ratio:.2%})")
-            if ratio <= max_diff_ratio:
-                return out, "full"
-            log(f"  CẢNH BÁO: khác quá {max_diff_ratio:.1%}, chuyển sang bản chỉ giá trị")
+            if ratio > max_diff_ratio:
+                raise Exception(f"khác quá {max_diff_ratio:.0%} số ô")
+            if diff:
+                log("  Dán giá trị gốc vào các ô khác (bỏ công thức của các ô đó):")
+                out = paste_values(out, cells, log)
+                total2, diff2 = compare_values(data, out, lambda *a: None)
+                log(f"  Sau khi dán: khác {diff2} ô")
+                if diff2:
+                    raise Exception(f"vẫn còn {diff2} ô khác sau khi dán giá trị")
+            return out, "full"
         except Exception as e:
-            log(f"  CẢNH BÁO: không đổi được bằng LibreOffice ({e}), chuyển sang bản chỉ giá trị")
+            log(f"  CẢNH BÁO: không giữ được công thức ({e}), chuyển sang bản chỉ giá trị")
     return to_xlsx(data, log=log), "values"
 
 
