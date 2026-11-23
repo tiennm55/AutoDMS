@@ -1,8 +1,8 @@
 """Chuyển file DMS (.xlsb) trong repo sang .xlsx rồi lưu lên SharePoint để Power BI làm mới trên cloud.
 
 Power BI Service không đọc được .xlsb khi không có gateway (thiếu Microsoft.ACE.OLEDB.12.0),
-nên bước này tạo một bản .xlsx chỉ chứa giá trị (không công thức), giữ nguyên tên và thứ tự sheet,
-để các truy vấn Power BI cũ (Item="Fundamental", ...) chạy được mà không phải sửa bước điều hướng.
+nên bước này tạo bản .xlsx giữ công thức và định dạng (LibreOffice, xem excel_convert.convert), giữ nguyên
+tên và thứ tự sheet, để các truy vấn Power BI cũ (Item="Fundamental", ...) chạy được mà không phải sửa.
 """
 import os
 import traceback
@@ -28,8 +28,17 @@ def main():
             raise Exception(f"Không thấy file đầu vào: {' hoặc '.join(INPUT_FILES)}")
         print(f"Chuyển {path} sang .xlsx:")
         with open(path, "rb") as f:
-            data = xc.to_xlsx(f.read(), SHEETS)
-        print(f"Dung lượng .xlsx: {len(data) / 1024 / 1024:.1f} MB")
+            src = f.read()
+        if SHEETS:
+            # Chỉ lấy một số sheet: dùng bản chỉ giá trị
+            data, used = xc.to_xlsx(src, SHEETS), "values"
+        else:
+            # Giữ công thức, định dạng (LibreOffice); ô nào khác file gốc thì dán giá trị gốc.
+            # Không có LibreOffice hoặc đổi hỏng thì tự quay về bản chỉ giá trị.
+            fmt = xc.detect_format(src) or "xlsb"
+            data, used = xc.convert(src, "." + fmt, os.environ.get("CONVERT_MODE") or "full")
+        kind = "giữ công thức, định dạng" if used == "full" else "chỉ giá trị"
+        print(f"Dung lượng .xlsx: {len(data) / 1024 / 1024:.1f} MB ({kind})")
         token = xc.get_token()
         item = xc.upload(token, xc.find_drive(token, SITE), OUTPUT_PATH, data)
         print(f"Đã lưu: {OUTPUT_PATH}")
