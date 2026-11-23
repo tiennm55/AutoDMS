@@ -20,7 +20,19 @@ jobs:
 
       - name: Cài đặt thư viện
         run: |
-          pip install python-calamine openpyxl msal requests pymupdf pillow
+          pip install python-calamine openpyxl lxml msal requests pymupdf pillow
+
+      - name: Cài LibreOffice bản mới nhất (để giữ công thức, định dạng)
+        # Bản 24.2 có sẵn trên Ubuntu đọc sai hàm XLOOKUP trong .xlsb, nên tải bản mới nhất.
+        # Nếu tải lỗi, bước đổi sẽ tự dùng bản chỉ giá trị.
+        continue-on-error: true
+        run: |
+          V=$(curl -fsL https://download.documentfoundation.org/libreoffice/stable/ | grep -oE 'href="[0-9]+\.[0-9]+\.[0-9]+/"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1)
+          echo "LibreOffice $V"
+          curl -fsSL -o lo.tgz "https://download.documentfoundation.org/libreoffice/stable/$V/deb/x86_64/LibreOffice_${V}_Linux_x86-64_deb.tar.gz"
+          tar xzf lo.tgz
+          sudo dpkg -i LibreOffice_*_deb/DEBS/*.deb > /dev/null
+          ls -d /opt/libreoffice*/program/soffice
 
       - name: Chuyển DMS sang .xlsx cho Power BI
         # Lỗi ở bước này không chặn các bước dán dữ liệu, tạo ảnh, gửi Zalo

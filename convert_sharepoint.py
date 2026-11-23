@@ -35,8 +35,19 @@ def convert_one(token, drive, folder, item):
     src = xc.download(token, drive, item["id"])
     fmt = xc.detect_format(src)
     if fmt == "xlsx":
-        print(f"\n{name}: đã là .xlsx thật, bỏ qua")
-        return False
+        if ext.lower() == ".xlsx":
+            print(f"\n{name}: đã là .xlsx thật, bỏ qua")
+            return False
+        # Nội dung đã là .xlsx nhưng tên sai đuôi (vd pivot_npp_202611.xls): chỉ đổi tên sang .xlsx
+        out_path = posixpath.join(folder, base + ".xlsx")
+        print(f"\n{name}: nội dung đã là .xlsx, chỉ đổi đuôi → {out_path}")
+        xc.upload(token, drive, out_path, src)
+        if SOURCE_ACTION == "delete":
+            xc.delete(token, drive, item["id"])
+        elif SOURCE_ACTION == "move":
+            xc.move(token, drive, item["id"], xc.ensure_folder(token, drive, folder, BACKUP_FOLDER))
+            print(f"  Đã chuyển file gốc vào {BACKUP_FOLDER}/")
+        return True
     if fmt is None:
         print(f"\n{name}: không nhận ra là file Excel, bỏ qua")
         return False
