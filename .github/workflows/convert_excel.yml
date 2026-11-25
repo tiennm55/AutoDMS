@@ -1,4 +1,6 @@
 name: Chuyển Excel sang .xlsx
+# Tiêu đề mỗi lần chạy (và thông báo GitHub trên điện thoại) hiện đường dẫn file đang đổi.
+run-name: "Đổi .xlsx: ${{ github.event.client_payload.path || inputs.path }}"
 # Power Automate gọi workflow này (repository_dispatch, event_type = convert-excel) sau khi lưu file đính kèm.
 # client_payload: {"site": "tiennm", "path": "C5-Insight/07_dms_mo/ten file.xlsb", "source_action": "move"}
 # File không đi qua repo: chỉ tải về máy chạy GitHub, đổi, rồi ghi lại SharePoint.
@@ -66,3 +68,12 @@ jobs:
           SOURCE_ACTION: ${{ github.event.client_payload.source_action || inputs.source_action }}
           CONVERT_MODE: ${{ github.event.client_payload.mode || inputs.mode }}
         run: python convert_sharepoint.py
+
+      - name: Ghi tên file vào tóm tắt
+        if: always()
+        env:
+          SRC_PATH: ${{ github.event.client_payload.path || inputs.path }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          echo "### Đổi .xlsx: \`$SRC_PATH\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Kết quả: $JOB_STATUS" >> "$GITHUB_STEP_SUMMARY"
